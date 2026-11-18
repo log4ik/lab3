@@ -1,0 +1,53 @@
+mkdir -p /home/romal/lab3/captures
+cd /home/romal/lab3
+sudo -v
+sudo ip netns add lab3s
+sudo ip netns add lab3c
+sudo ip link add srv3 type veth peer name cli3
+sudo ip link set srv3 netns lab3s
+sudo ip link set cli3 netns lab3c
+sudo ip -n lab3s addr add 10.35.11.1/24 dev srv3
+sudo ip -n lab3s link set srv3 up
+sudo ip -n lab3c link set cli3 up
+sudo ip -n lab3s -br addr
+cat dhcpd.conf
+sudo cp dhcpd.conf /etc/dhcp/lab3-3511.conf
+sudo touch /var/lib/dhcp/dhcpd.leases.3511
+sudo ip netns exec lab3s dhcpd -4 -d --no-pid -cf /etc/dhcp/lab3-3511.conf -lf /var/lib/dhcp/dhcpd.leases.3511 srv3 > server.log 2>&1 &
+sudo ip netns exec lab3s tcpdump -U -i srv3 -w /tmp/roman3-dhcp.pcap 'port 67 or port 68' > capture.log 2>&1 &
+sudo ip netns exec lab3c dhclient -4 -1 -v -lf /tmp/roman3-client.leases -pf /tmp/roman3-client.pid cli3 2>&1 | tee client.log
+sudo kill -INT 3486
+sudo cp /tmp/roman3-dhcp.pcap captures/dhcp.pcap
+tail -n 4 server.log
+sudo ip -n lab3c -4 addr show cli3
+sudo ip -n lab3c route
+tshark -r captures/dhcp.pcap -Y dhcp
+sudo ip netns exec lab3c tcpdump -U -i cli3 -w /tmp/roman3-arp.pcap 'arp or icmp' > arp-capture.log 2>&1 &
+sudo ip -n lab3c neigh replace 10.35.11.1 lladdr 5e:15:d1:f2:cd:7b nud permanent dev cli3
+sudo ip -n lab3c neigh show dev cli3
+sudo ip netns exec lab3c ping -c 3 10.35.11.1
+sudo kill -INT 3571
+sudo cp /tmp/roman3-arp.pcap captures/arp.pcap
+tshark -r captures/arp.pcap -Y icmp
+sudo kill 3500 3483
+sudo ip -n lab3c addr flush dev cli3
+sed '/^[[:space:]]*range /d' dhcpd.conf > no-range.conf
+sudo cp no-range.conf /etc/dhcp/lab3-3511.conf
+cat no-range.conf
+sudo touch /var/lib/dhcp/dhcpd.leases.3511-empty
+sudo ip netns exec lab3s dhcpd -4 -d --no-pid -cf /etc/dhcp/lab3-3511.conf -lf /var/lib/dhcp/dhcpd.leases.3511-empty srv3 > defect.log 2>&1 &
+sudo ip netns exec lab3c tcpdump -U -i cli3 -w /tmp/roman3-defect.pcap 'port 67 or port 68' > defect-capture.log 2>&1 &
+sudo ip netns exec lab3c timeout 15 dhclient -4 -d -v -lf /var/lib/dhcp/dhclient.leases.3511 -pf /run/dhclient.pid cli3 > retry.log 2>&1
+sudo kill -INT 3623
+sudo cp /tmp/roman3-defect.pcap captures/no-range.pcap
+tail -n 4 defect.log
+sudo ip -n lab3c -4 -br addr
+tshark -r captures/no-range.pcap -Y dhcp
+sudo kill 3620
+sudo cp dhcpd.conf /etc/dhcp/lab3-3511.conf
+sudo ip netns exec lab3s dhcpd -4 -d --no-pid -cf /etc/dhcp/lab3-3511.conf -lf /var/lib/dhcp/dhcpd.leases.3511 srv3 > restored.log 2>&1 &
+sudo ip netns exec lab3c dhclient -4 -1 -v -lf /var/lib/dhcp/dhclient.leases.3511 -pf /run/dhclient-lab3.pid cli3 2>&1 | tee restored-client.log
+sudo ip netns exec lab3c traceroute -n -m 2 10.35.11.1
+sudo ip -n lab3c route
+wireshark -r captures/arp.pcap > /tmp/roman3-ws.log 2>&1 &
+history -w history.txt
